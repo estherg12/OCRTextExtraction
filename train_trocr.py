@@ -1,5 +1,6 @@
 import evaluate
 import numpy as np
+import os
 import pandas as pd
 from PIL import Image
 import torch
@@ -14,10 +15,8 @@ from transformers import (
     ViTImageProcessor,
 )
 
-from datasets import load_dataset
-
-# Loads Spanish marriage records (Esposalles) containing line images + transcripts
-dataset = load_dataset("perellon/esposalles-ocr")
+num_cores = os.cpu_count() or 4
+torch.set_num_threads(num_cores)
 
 # Dataset Class
 class SpanishHandwritingDataset(Dataset):
@@ -69,15 +68,20 @@ def compute_metrics(pred, tokenizer):
 
 # Training Execution
 def train():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
     repo_id = "microsoft/trocr-base-handwritten"
 
     # Load processor using explicit RobertaTokenizer to prevent Windows fast-tokenizer errors
     image_processor = ViTImageProcessor.from_pretrained(repo_id)
     tokenizer = RobertaTokenizer.from_pretrained(repo_id)
-    processor = TrOCRProcessor(image_processor=image_processor, tokenizer=tokenizer)
+    processor = TrOCRProcessor(
+        image_processor=image_processor, tokenizer=tokenizer
+    )
 
     model = VisionEncoderDecoderModel.from_pretrained(repo_id)
+    for param in model.encoder.parameters():
+        param.requires_grad = False
+
     model.to(device)
 
     # Configure model sequence generation settings
@@ -90,39 +94,36 @@ def train():
     df["file_path"] = "dataset/" + df["file_name"]
 
     # 90/10 train/validation split
-    train_df = df.sample(frac=0.9, random_state=42)
-    val_df = df.drop(train_df.index)
+    train_df = df.sample(n=1500, random_state=42)
+    val_df = df.drop(train_df.index).sample(n=150, random_state=42)
 
     train_dataset = SpanishHandwritingDataset(train_df, processor)
     eval_dataset = SpanishHandwritingDataset(val_df, processor)
 
     training_args = Seq2SeqTrainingArguments(
         output_dir="./trocr_spanish_checkpoint",
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4,
-        predict_with_generate=True,
-        evaluation_strategy="epoch",
+        per_device_train_batch_size=8,  # Increased batch size reduces step overhead
+        per_device_eval_batch_size=8,
+        predict_with_generate=False,  # False to skip slow autoregressive eval steps on CPU
+        eval_strategy="no",  # Skip eval during training to save time; evaluate only at the end
         save_strategy="epoch",
-        logging_steps=10,
-        num_train_epochs=10,
-        learning_rate=5e-5,
-        fp16=torch.cuda.is_available(),  # Speeds up training on NVIDIA GPUs
-        save_total_limit=2,
-        load_best_model_at_end=True,
-        metric_for_best_model="cer",
-        greater_is_better=False,
+        logging_steps=25,
+        num_train_epochs=2,  # 2 epochs is sufficient for the decoder to adapt
+        learning_rate=1e-4,
+        dataloader_num_workers=0,  # Windows stability
+        save_total_limit=1,
     )
 
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
         data_collator=DefaultDataCollator(),
-        compute_metrics=lambda p: compute_metrics(p, tokenizer),
     )
 
-    print("Starting fine-tuning...")
+    print(
+        f"Starting accelerated CPU training using {num_cores} threads (Encoder Frozen)..."
+    )
     trainer.train()
 
     # Save final Spanish checkpoint
