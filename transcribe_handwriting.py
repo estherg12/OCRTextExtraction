@@ -11,9 +11,11 @@ from transformers import (
 )
 
 def load_trocr():
+    """Load the locally fine-tuned Spanish TrOCR model."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     checkpoint_dir = "./trocr_spanish_final"
 
+    # Load processors directly from the fine-tuned folder
     image_processor = ViTImageProcessor.from_pretrained(checkpoint_dir)
     tokenizer = RobertaTokenizer.from_pretrained(checkpoint_dir)
     processor = TrOCRProcessor(
@@ -21,51 +23,60 @@ def load_trocr():
     )
 
     model = VisionEncoderDecoderModel.from_pretrained(checkpoint_dir).to(device)
+    model.eval()
+
     return processor, model, device
 
 
 def segment_lines(image_path: str):
-    """Segment an unlined or handwritten page into individual line crops."""
+    """Segment handwritten text lines with visual debugging."""
     image = cv2.imread(image_path)
+    if image is None:
+        raise FileNotFoundError(f"Cannot open image: {image_path}")
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Invert and blur
+    # Invert binary threshold (ink becomes white, background becomes black)
     _, thresh = cv2.threshold(
         gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
-    # Dilate horizontally to connect cursive letters into solid text lines
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 5))
+    # Wide horizontal kernel to fuse cursive letters into continuous line blocks
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 7))
     dilated = cv2.dilate(thresh, kernel, iterations=2)
 
-    # Find line contours
     contours, _ = cv2.findContours(
         dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    # Sort contours top-to-bottom
+    # Sort contours strictly top-to-bottom
     bounding_boxes = [cv2.boundingRect(c) for c in contours]
     bounding_boxes.sort(key=lambda b: b[1])
 
     line_crops = []
     h_img, w_img = gray.shape
 
-    # Save each crop to see what TrOCR is actually looking at
-    Path("debug_crops").mkdir(exist_ok=True)
-    for idx, crop in enumerate(line_crops):
-        crop.save(f"debug_crops/crop_{idx}.png")
-
+    # Filter out dust, specks, and isolate full text lines
     for x, y, w, h in bounding_boxes:
-        # Filter out minor specks or isolated dots
-        if w > 30 and h > 15:
-            # Add small padding around the crop
-            pad_y = max(0, y - 5)
-            pad_x = max(0, x - 5)
+        if w > 40 and h > 18:
+            pad_y = max(0, y - 6)
+            pad_x = max(0, x - 8)
             crop = image[
-                pad_y : min(h_img, y + h + 5), pad_x : min(w_img, x + w + 5)
+                pad_y : min(h_img, y + h + 6), pad_x : min(w_img, x + w + 8)
             ]
-            line_crops.append(Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)))
+            line_crops.append(
+                Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+            )
 
+    # Save debug crops so you can see each segmented line
+    debug_dir = Path("debug_crops")
+    debug_dir.mkdir(exist_ok=True)
+    for idx, crop in enumerate(line_crops):
+        crop.save(debug_dir / f"line_{idx:02d}.png")
+
+    print(
+        f"Segmented {len(line_crops)} text lines (saved previews to debug_crops/)."
+    )
     return line_crops
 
 
@@ -74,25 +85,34 @@ def transcribe_image(image_path: str) -> str:
     line_images = segment_lines(image_path)
 
     recognized_lines = []
-    for line_img in line_images:
-        pixel_values = processor(line_img, return_tensors="pt").pixel_values.to(
-            device
-        )
+    for idx, line_img in enumerate(line_images):
+        pixel_values = processor(
+            line_img, return_tensors="pt"
+        ).pixel_values.to(device)
         with torch.no_grad():
-            generated_ids = model.generate(pixel_values, max_new_tokens=64)
+            generated_ids = model.generate(
+                pixel_values,
+                max_new_tokens=64,
+                num_beams=3,  # Beam search produces cleaner Spanish sentence syntax
+                early_stopping=True,
+            )
         line_text = processor.batch_decode(
             generated_ids, skip_special_tokens=True
         )[0]
-        recognized_lines.append(line_text)
+        recognized_lines.append(line_text.strip())
 
     return "\n".join(recognized_lines)
 
 
 if __name__ == "__main__":
-    test_img = "images/sample_invoice2.png" if Path("images/sample_invoice2.png").exists() else "sample_invoice2.png"
+    test_img = "images/sample_invoice2.png"
+
+    print(f"Transcribing {test_img} with fine-tuned Spanish model...")
     result = transcribe_image(test_img)
-    print("--- Detected Text ---")
+
+    print("\n--- Output Transcription ---")
     print(result)
+    print("----------------------------\n")
 
     with open("handwriting_output.txt", "w", encoding="utf-8") as f:
         f.write(result)

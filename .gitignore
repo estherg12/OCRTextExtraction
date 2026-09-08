@@ -1,0 +1,15 @@
+# Virtual environment & IDE settings
+.venv/
+.idea/
+__pycache__/
+*.pyc
+
+# Heavy machine learning models (exceeds GitHub limits)
+trocr_spanish_checkpoint/
+trocr_spanish_final/
+
+# Datasets and debug folders
+dataset/
+debug_crops/
+handwriting_output.txt
+*.pdf
