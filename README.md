@@ -69,32 +69,3 @@ model = VisionEncoderDecoderModel.from_pretrained(
 
 ## License
 This project is licensed under the MIT License.
-
-### 5. Maximize GitHub Discovery & SEO
-
-To get stars, views, and users finding your repo through search:
-
-1. **Add Repository Topics (Tags):**
-   * On your GitHub repo main page, look at the top right of the **About** section.
-   * Click the **Gear icon ⚙️**.
-   * Under **Topics**, add these tags:
-     `ocr`, `handwriting-recognition`, `trocr`, `spanish-nlp`, `vision-transformer`, `deep-learning`, `python`, `pdf-generation`, `htr`.
-   * Under **Website**, paste your Hugging Face model URL: `[https://huggingface.co/ifesther/trocr-spanish-handwritten](https://huggingface.co/ifesther/trocr-spanish-handwritten)`.
-   * Click **Save changes**.
-
-2. **Remove Unwanted Files From Git Tracking:**
-   * Notice your repository still has `.idea/` committed (this is your local PyCharm editor configuration and shouldn't be public).
-   * Run this in your terminal to untrack it:
-     ```
-     git rm -r --cached .idea
-     git commit -m "Remove .idea folder from git tracking"
-     git push origin main
-     ```
-
-3. **Commit and Push Everything:**
-   ```
-   git add requirements.txt README.md transcribe_handwriting.py
-   git commit -m "Add requirements, automated HF model download, and comprehensive README"
-   git push origin main
-   ```
-   
