@@ -11,22 +11,21 @@ from transformers import (
 )
 
 def load_trocr():
-    """Load the locally fine-tuned Spanish TrOCR model."""
+    """Load the trained Spanish TrOCR model directly from Hugging Face Hub."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    checkpoint_dir = "./trocr_spanish_final"
+    repo_id = "ifesther/trocr-spanish-handwritten"
 
-    # Load processors directly from the fine-tuned folder
-    image_processor = ViTImageProcessor.from_pretrained(checkpoint_dir)
-    tokenizer = RobertaTokenizer.from_pretrained(checkpoint_dir)
+    # Automatically downloads and caches your weights from Hugging Face Hub
+    image_processor = ViTImageProcessor.from_pretrained(repo_id)
+    tokenizer = RobertaTokenizer.from_pretrained(repo_id)
     processor = TrOCRProcessor(
         image_processor=image_processor, tokenizer=tokenizer
     )
 
-    model = VisionEncoderDecoderModel.from_pretrained(checkpoint_dir).to(device)
+    model = VisionEncoderDecoderModel.from_pretrained(repo_id).to(device)
     model.eval()
 
     return processor, model, device
-
 
 def segment_lines(image_path: str):
     """Segment handwritten text lines with visual debugging."""

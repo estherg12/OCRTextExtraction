@@ -1,0 +1,9 @@
+torch
+torchvision
+transformers
+pillow
+opencv-python
+numpy
+pandas
+fpdf2
+huggingface_hub
