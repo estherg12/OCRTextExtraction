@@ -11,19 +11,16 @@ from transformers import (
 )
 
 def load_trocr():
-    """Load TrOCR bypassing the fast tokenizer conversion issue."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    repo_id = "microsoft/trocr-base-handwritten"
+    checkpoint_dir = "./trocr_spanish_final"
 
-    # Explicitly load feature extractor and slow tokenizer separately
-    image_processor = ViTImageProcessor.from_pretrained(repo_id)
-    tokenizer = RobertaTokenizer.from_pretrained(repo_id)
-
+    image_processor = ViTImageProcessor.from_pretrained(checkpoint_dir)
+    tokenizer = RobertaTokenizer.from_pretrained(checkpoint_dir)
     processor = TrOCRProcessor(
         image_processor=image_processor, tokenizer=tokenizer
     )
-    model = VisionEncoderDecoderModel.from_pretrained(repo_id).to(device)
 
+    model = VisionEncoderDecoderModel.from_pretrained(checkpoint_dir).to(device)
     return processor, model, device
 
 
