@@ -12,7 +12,7 @@ from transformers import (
 from spellchecker import SpellChecker
 
 # Target a single-phrase test image directly
-IMAGE_FILE = "images/phrase8.png"
+IMAGE_FILE = "images/phrase16.png"
 LOCAL_MODEL_DIR = "./trocr_spanish_final"
 
 def correct_spanish_text(text: str) -> str:
