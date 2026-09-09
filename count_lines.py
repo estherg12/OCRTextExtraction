@@ -308,8 +308,8 @@ def crop_and_save_lines(image_path: str, lines: list[TextLine], output_dir: str 
         # We take the full width of the image (:)
         cropped_img = image[line.top:line.bottom, :]
 
-        # Build the output file path (e.g., output/test4_line_01.png)
-        out_file = out_dir / f"{base_name}_line_{i:02d}.png"
+        # Build the output file path (e.g., output/test4_line_1.png)
+        out_file = out_dir / f"{base_name}_line_{i:1d}.png"
 
         # Save the image
         cv2.imwrite(str(out_file), cropped_img)
@@ -329,10 +329,17 @@ def _print_report(image_path: str, lines: list[TextLine]) -> None:
     print(f"\nTallest: {max(heights)} px   Shortest: {min(heights)} px   "
           f"Average: {round(sum(heights) / len(heights))} px")
 
+def run_as_main(image: str) -> list[TextLine]:
+    detected_lines = measure_text_lines(image)
+    _print_report(image, detected_lines)
+    if detected_lines:
+        crop_and_save_lines(image, detected_lines, output_dir="output")
+    return detected_lines
 
 if __name__ == "__main__":
     # Analyze the image to find text lines
     detected_lines = measure_text_lines(IMAGE_FILE)
+    print(detected_lines)
     # Print out the calculated line metrics
     _print_report(IMAGE_FILE, detected_lines)
     # Crop and save those lines as individual files
