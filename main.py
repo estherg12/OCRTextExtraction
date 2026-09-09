@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import torch
 from PIL import Image
+from fpdf import FPDF
 from transformers import (
     RobertaTokenizer,
     TrOCRProcessor,
@@ -13,7 +14,7 @@ from spellchecker import SpellChecker
 from count_lines import run_as_main
 
 # Target a single-phrase test image directly
-IMAGE_FILE = "test2"
+IMAGE_FILE = "test3"
 LOCAL_MODEL_DIR = "./trocr_spanish_final"
 
 def correct_spanish_text(text: str) -> str:
@@ -84,6 +85,28 @@ def delete_output_content():
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
+def export_to_txt(lines: list[str], output_path: str):
+    """Export lines to a UTF-8 text file."""
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"Saved transcript to: {output_path}")
+
+
+def export_to_pdf(lines: list[str], output_path: str):
+    """Export lines to a PDF file handling Spanish characters and accents."""
+    pdf = FPDF(format='letter')
+    #pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=16)
+
+    for line in lines:
+        pdf.cell(200, 10, text=line,
+                 ln=1, align='C')
+        pdf.ln()
+
+    pdf.output(output_path)
+    print(f"Saved transcript to: {output_path}")
+
 if __name__ == "__main__":
     detected_lines = run_as_main("images/"+IMAGE_FILE+".png")
 
@@ -101,8 +124,8 @@ if __name__ == "__main__":
     model = VisionEncoderDecoderModel.from_pretrained(LOCAL_MODEL_DIR).to(device)
     model.eval()
 
-    RAW_LINES = ""
-    NLP_LINES = ""
+    RAW_LINES = []
+    NLP_LINES = []
 
     for i, line in enumerate(detected_lines, start=1):
         txt_tuple = test_single_phrase(f"output/{IMAGE_FILE}_line_{i}.png", processor, model, i)
@@ -110,11 +133,25 @@ if __name__ == "__main__":
         raw_text = txt_tuple[0]
         corrected_text = txt_tuple[1]
 
-        RAW_LINES += raw_text + "\n"
-        NLP_LINES += corrected_text + "\n"
+        RAW_LINES.append(raw_text)
+        NLP_LINES.append(corrected_text)
 
     print(f"\nRaw Lines:\n{RAW_LINES}")
     print(f"\nNLP Lines:\n{NLP_LINES}")
 
     delete_output_content()
-    print("Output content deleted.")
+    print("\nOutput content deleted.")
+
+    base_name = Path(IMAGE_FILE).stem
+
+    txt_out_raw = f"output/{base_name}_transcription_raw.txt"
+    pdf_out_raw = f"output/{base_name}_transcription_raw.pdf"
+    txt_out_nlp = f"output/{base_name}_transcription_nlp.txt"
+    pdf_out_nlp = f"output/{base_name}_transcription_nlp.pdf"
+
+    export_to_txt(RAW_LINES, txt_out_raw)
+    export_to_pdf(RAW_LINES, pdf_out_raw)
+    export_to_txt(NLP_LINES, txt_out_nlp)
+    export_to_pdf(NLP_LINES, pdf_out_nlp)
+
+    print("Transcription files saved.")
