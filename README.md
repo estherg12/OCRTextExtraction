@@ -14,7 +14,6 @@ Powered by a fine-tuned Vision-Encoder-Decoder model hosted on Hugging Face:
 
 - **Zero English Hallucination:** Standard TrOCR models default to English syntax and hallucinate random English text when processing Spanish sentences. This model is fine-tuned specifically on modern Spanish vocabulary and orthography.
 - **Diacritics & Special Glyphs:** Full character coverage for `á, é, í, ó, ú, ü`, `ñ`, and punctuation (`¿`, `¡`).
-- **OpenCV Line Segmentation:** Automated morphological text-line detection and isolation from full documents.
 - **Export Formats:** Direct export to clean `.txt` transcripts and formatted `.pdf` reports.
 
 ---
@@ -61,9 +60,12 @@ model = VisionEncoderDecoderModel.from_pretrained(
 
 ## Repository Architecture
 - ```main.py```: entry point for full-page processing and document export (.txt / .pdf).
-- ```transcribe_handwriting.py```: line segmentation and TrOCR inference pipeline.
 - ```generate_synthetic_dataset.py```: synthetic generator used to create diverse handwriting line crops.
 - ```train_trocr.py```: fine-tuning script (only needed if retraining from scratch).
+- ```upload_model.py```: was used to upload the trained model to Hugging Face.
+- ```local_app.py```: optional interactive visual UI.
+- ```fonts/``` & ```training_pdf/```: input source materials.
+- ```images/```: samples.
 
 ---
 
