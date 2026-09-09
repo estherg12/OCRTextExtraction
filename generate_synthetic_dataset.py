@@ -1,281 +1,209 @@
-import csv
-import glob
-from pathlib import Path
+import os
+import re
 import random
-import cv2
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from pypdf import PdfReader
 
-# Directories
+# Directorios de trabajo
+PDF_DIR = Path("training_pdf")
 OUTPUT_DIR = Path("dataset")
 IMAGES_DIR = OUTPUT_DIR / "images"
-IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+FONTS_DIR = Path("fonts")
+METADATA_FILE = OUTPUT_DIR / "metadata.tsv"
 
-# 1. Corrected & Expanded Modern Spanish Vocabulary
-SUBJECTS = [
-    "No te rindas,",
-    "La mujer",
-    "El hombre",
-    "El amor de mi vida",
-    "Tú",
-    "La mujer que amas",
-    "El hombre que amas",
-    "Tu presencia",
-    "El viaje",
-    "Cada amanecer",
-    "Cada atardecer",
-    "La vida",
-    "Nuestra memoria",
-    "Vuestra memoria",
-    "El camino",
-    "Tu mirada",
-    "Su mirada",
-    "Agradezco",
-    "Si buscas el éxito,",
-    "El mayor tesoro",
-    "La perseverancia",
-    "Un corazón sincero",
-    "Un corazón rebelde",
-    "El tiempo compartido",
-    "Tu sonrisa",
-    "Su sonrisa",
-    "La paciencia",
-    "Caminar juntos",
-    "Un buen recuerdo",
-    "La libertad",
-    "Escribir poemas",
-    "Mi mujer soñada",
-    "Mi hombre soñado",
-    "Mi mujer",
-    "Mi hombre",
-    "Eres mi mejor compañía",
-    "Eres la razón",
-    "Tu amor",
-    "Si quieres ser mi estrella,",
-]
-
-VERBS_PREDICATES = [
-    "hace que todo sea más hermoso.",
-    "me quiere más que a nada.",
-    "me cuida como a una flor.",
-    "huele a rosas frescas.",
-    "sabe protegerme siempre.",
-    "tiene un corazón rebelde.",
-    "cuida sus flores cada día.",
-    "pertenece a mi vida.",
-    "sabe que todo vale la pena.",
-    "me dice que todo saldrá bien.",
-    "es un regalo que no debemos olvidar.",
-    "abre senderos que antes no existían.",
-    "ilumina cada rincón del alma.",
-    "construye puentes sobre mares agitados.",
-    "nos enseña a valorar lo simple.",
-    "vence cualquier obstáculo con calma.",
-    "guía los pasos hacia nuevos horizontes.",
-    "deja huellas imborrables en el tiempo.",
-    "merece vivirse con toda la intensidad.",
-    "despierta pasiones dormidas.",
-    "es la razón de sonreír a diario.",
-    "transforma la rutina en pura magia.",
-    "alcanza cimas que parecían lejanas.",
-    "acompaña las noches de invierno.",
-    "da sentido a los pequeños instantes.",
-    "y mi mayor apoyo.",
-    "por la que sonrío todos los días.",
-    "ilumina mi vida por completo.",
-    "prometo ser tu cielo.",
-]
-
-AUTHORS_TAGS = [
-    "- Mario Benedetti.",
-    "- Gabriel García Márquez.",
-    "- Federico García Lorca.",
-    "- Jorge Luis Borges.",
-    "- Isabel Allende.",
-    "- Antonio Machado.",
-    "- Gustavo Adolfo Bécquer.",
-    "- Pablo Neruda.",
-    "- Octavio Paz.",
-    "- Julio Cortázar.",
-    "- Saludos desde Madrid.",
-    "- Notas del día 15-08-24.",
-    "- Ref: 984-A / Cuaderno.",
-    "- Saludos desde Cádiz",
-    "- Madrid, 03/09/92",
-    "L.L.L. ~ 02-10-23",
-]
+TARGET_SAMPLES = 30000
 
 
-def check_font_spanish_support(font_path: str) -> bool:
-    """Check if the font contains Spanish glyphs (accents, ñ, symbols)."""
-    test_chars = "áéíóúÁÉÍÓÚñÑüÜ¿¡~"
+# EXTRACCIÓN Y LIMPIEZA DE FRASES DESDE LOS PDFS
+
+def clean_and_split_text(raw_text: str) -> list[str]:
+    """Limpia el texto bruto y lo divide en líneas/frases de longitud idónea para TrOCR."""
+    # Reemplazar saltos de línea y múltiples espacios por un espacio simple
+    text = re.sub(r"\s+", " ", raw_text)
+
+    # Separar por puntos, signos de exclamación, interrogación, guiones largos o comas mayores
+    raw_phrases = re.split(r"(?<=[.?!;])\s+|(?<=[,])\s+", text)
+
+    valid_lines = []
+    for phrase in raw_phrases:
+        p = phrase.strip()
+
+        # Eliminar comillas y caracteres huérfanos
+        p = re.sub(r'^["\'«»—–\-\s]+|["\'«»—–\-\s]+$', '', p).strip()
+
+        # Filtrar números de página, índices numéricos o encabezados vacíos
+        if not p or len(p) < 12 or len(p) > 85:
+            continue
+
+        words = p.split()
+        # Una línea de caligrafía ideal para TrOCR contiene entre 3 y 11 palabras
+        if len(words) < 3 or len(words) > 11:
+            continue
+
+        # Conservar solo texto con caracteres legítimos en español
+        if not re.search(r"[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]", p):
+            continue
+
+        # Descartar URLs, rutas o artefactos de digitalización
+        if re.search(r"(http|www|\.com|\[|\]|\{|\}|\\|/|_|\*|<|>)", p):
+            continue
+
+        valid_lines.append(p)
+
+    return valid_lines
+
+
+def build_sentence_bank_from_pdfs(pdf_folder: Path, target_count: int) -> list[str]:
+    """Lee todos los archivos PDF presentes en la carpeta y extrae frases únicas."""
+    pdf_files = list(pdf_folder.glob("*.pdf"))
+    if not pdf_files:
+        raise FileNotFoundError(f"No se encontraron archivos PDF dentro de '{pdf_folder.resolve()}'.")
+
+    print(f"Extrayendo texto de {len(pdf_files)} libros/documentos PDF...")
+    all_sentences = set()
+
+    for pdf_path in pdf_files:
+        print(f" -> Procesando '{pdf_path.name}'...")
+        try:
+            reader = PdfReader(str(pdf_path))
+            for page_idx, page in enumerate(reader.pages):
+                extracted = page.extract_text()
+                if extracted:
+                    lines = clean_and_split_text(extracted)
+                    all_sentences.update(lines)
+
+                # Si ya hemos acumulado holgadamente más frases de las necesarias, detenemos la lectura
+                if len(all_sentences) >= target_count * 1.3:
+                    break
+        except Exception as e:
+            print(f" [Aviso] Error leyendo '{pdf_path.name}': {e}")
+            continue
+
+        if len(all_sentences) >= target_count * 1.3:
+            break
+
+    sentence_list = list(all_sentences)
+    random.seed(42)
+    random.shuffle(sentence_list)
+
+    if len(sentence_list) < target_count:
+        print(f" [Aviso] Se extrajeron {len(sentence_list)} frases únicas (se esperaban {target_count}).")
+        # Si faltasen, rellenamos combinando fragmentos para alcanzar el volumen objetivo
+        augmented = []
+        while len(sentence_list) + len(augmented) < target_count:
+            s1 = random.choice(sentence_list)
+            augmented.append(s1)
+        sentence_list.extend(augmented)
+
+    final_bank = sentence_list[:target_count]
+    print(f"Banco de datos construido con éxito: {len(final_bank)} frases reales en español.\n")
+    return final_bank
+
+
+# RENDERIZADO SINTÉTICO RÁPIDO EN PARALELO
+
+def apply_fast_degradations(img: Image.Image) -> Image.Image:
+    """Aplica ruido de grano y leve desenfoque de absorción de tinta optimizado en NumPy."""
+    np_img = np.array(img, dtype=np.int16)
+
+    # Grano de textura de papel ligero
+    noise = np.random.randint(-4, 5, np_img.shape, dtype=np.int16)
+    np_img = np.clip(np_img + noise, 0, 255).astype(np.uint8)
+
+    result_img = Image.fromarray(np_img)
+    if random.random() < 0.35:
+        result_img = result_img.filter(ImageFilter.BoxBlur(radius=0.4))
+    return result_img
+
+
+def render_single_crop(task_data: tuple) -> str:
+    """Función de renderizado para cada hilo del multiprocessing pool."""
+    idx, text, font_path = task_data
+
+    font_size = random.randint(30, 42)
     try:
-        font = ImageFont.truetype(font_path, size=24)
-        for ch in test_chars:
-            # Check bounding box: missing glyphs evaluate to empty/zero width in PIL
-            bbox = font.getbbox(ch)
-            if bbox is None or (bbox[2] - bbox[0]) == 0:
-                return False
-        return True
-    except Exception:
-        return False
-
-
-def generate_phrases(min_count=1200):
-    phrases = set()
-    while len(phrases) < min_count:
-        mode = random.choice([1, 2, 3])
-        if mode == 1:
-            phrases.add(
-                f"{random.choice(SUBJECTS)} {random.choice(VERBS_PREDICATES)}"
-            )
-        elif mode == 2:
-            phrases.add(
-                f"{random.choice(SUBJECTS)} {random.choice(VERBS_PREDICATES)} {random.choice(AUTHORS_TAGS)}"
-            )
-        else:
-            phrases.add(random.choice(AUTHORS_TAGS))
-    return list(phrases)
-
-
-def create_paper_background(w, h):
-    # Realistic paper tonalities
-    bg_color = (
-        random.randint(238, 255),
-        random.randint(235, 252),
-        random.randint(225, 248),
-    )
-    img = Image.new("RGB", (w, h), color=bg_color)
-    draw = ImageDraw.Draw(img)
-
-    # 40% probability of notebook grid / ruled lines
-    if random.random() < 0.40:
-        grid_color = (
-            random.randint(190, 220),
-            random.randint(200, 230),
-            random.randint(220, 245),
-        )
-        step = random.randint(18, 26)
-        # Horizontal rules
-        for y in range(0, h, step):
-            draw.line([(0, y), (w, y)], fill=grid_color, width=1)
-        # Vertical grid columns
-        if random.random() < 0.5:
-            for x in range(0, w, step):
-                draw.line([(x, 0), (x, h)], fill=grid_color, width=1)
-
-    return img
-
-
-def render_synthetic_line(text, font_path, output_path):
-    font_size = random.randint(26, 38)
-    try:
-        font = ImageFont.truetype(font_path, font_size)
+        font = ImageFont.truetype(str(font_path), font_size)
     except Exception:
         font = ImageFont.load_default()
 
-    dummy_img = Image.new("RGB", (10, 10))
-    dummy_draw = ImageDraw.Draw(dummy_img)
-    bbox = dummy_draw.textbbox((0, 0), text, font=font)
+    # Medir caja de texto
+    dummy_img = Image.new("RGB", (1, 1))
+    draw_dummy = ImageDraw.Draw(dummy_img)
+    bbox = draw_dummy.textbbox((0, 0), text, font=font)
+
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
 
-    # Extra padding prevents cursive descenders (g, j, y, p) from clipping
-    pad_x = random.randint(25, 40)
-    pad_y = random.randint(20, 35)
-    w = max(100, text_w + pad_x * 2)
-    h = max(50, text_h + pad_y * 2)
+    # Margen de seguridad para descendentes y ascendentes
+    pad_x = random.randint(15, 25)
+    pad_y = random.randint(10, 20)
+    img_w = max(80, text_w + pad_x * 2)
+    img_h = max(45, text_h + pad_y * 2)
 
-    img = create_paper_background(w, h)
+    # Fondo claro tipo papel (blanco marfil, crema, gris claro)
+    bg_val = random.randint(240, 255)
+    bg_color = (bg_val, max(0, bg_val - random.randint(0, 4)), max(0, bg_val - random.randint(0, 8)))
+
+    # Color de tinta (negro, azul marino oscuro, gris carbón)
+    if random.random() < 0.6:
+        ink_color = (random.randint(15, 45), random.randint(15, 45), random.randint(15, 45))
+    else:
+        ink_color = (random.randint(10, 30), random.randint(15, 40), random.randint(55, 95))
+
+    img = Image.new("RGB", (img_w, img_h), color=bg_color)
     draw = ImageDraw.Draw(img)
+    draw.text((pad_x - bbox[0], pad_y - bbox[1]), text, font=font, fill=ink_color)
 
-    # Ink spectrum: Ballpoint blue, deep black, aged dark sepia
-    ink_types = [
-        (random.randint(15, 45), random.randint(20, 50), random.randint(90, 160)),
-        (random.randint(20, 45), random.randint(20, 45), random.randint(25, 45)),
-        (random.randint(30, 60), random.randint(20, 40), random.randint(40, 70)),
-    ]
-    ink = random.choice(ink_types)
+    # Añadir leve ruido de soporte
+    final_img = apply_fast_degradations(img)
 
-    draw.text((pad_x - bbox[0], pad_y - bbox[1]), text, font=font, fill=ink)
+    file_name = f"crop_{idx:06d}.png"
+    out_path = IMAGES_DIR / file_name
+    final_img.save(out_path, format="PNG", optimize=False)
 
-    np_img = np.array(img)
-
-    # Perspective distortion
-    if random.random() < 0.5:
-        pts1 = np.float32([[0, 0], [w, 0], [0, h], [w, h]])
-        shift = random.uniform(-3, 3)
-        pts2 = np.float32([[shift, 0], [w + shift, 0], [0, h], [w, h]])
-        matrix = cv2.getPerspectiveTransform(pts1, pts2)
-        np_img = cv2.warpPerspective(
-            np_img, matrix, (w, h), borderValue=(245, 243, 238)
-        )
-
-    # Stroke bleed simulation
-    if random.random() < 0.4:
-        np_img = cv2.GaussianBlur(np_img, (3, 3), 0)
-
-    # Sensor noise
-    noise = np.random.normal(0, random.uniform(1.0, 3.5), np_img.shape).astype(
-        np.float32
-    )
-    noisy_img = np.clip(np_img.astype(np.float32) + noise, 0, 255).astype(
-        np.uint8
-    )
-
-    Image.fromarray(noisy_img).save(output_path)
+    return f"{file_name}\t{text}\n"
 
 
-def generate_dataset(num_samples=3000):
-    all_fonts = glob.glob("fonts/*.ttf") + glob.glob("fonts/*.otf")
-    if not all_fonts:
-        raise FileNotFoundError(
-            "No handwriting fonts found in the 'fonts/' folder."
-        )
+def generate_dataset(num_samples: int = TARGET_SAMPLES):
+    """Orquesta la extracción, balanceo de fuentes y renderizado multiproceso."""
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Validate fonts for Spanish glyph coverage
-    valid_fonts = [f for f in all_fonts if check_font_spanish_support(f)]
-    print(f"Total fonts detected: {len(all_fonts)}")
-    print(f"Fonts with full Spanish glyph support: {len(valid_fonts)}")
+    # Obtener tipografías
+    fonts = list(FONTS_DIR.glob("*.ttf")) + list(FONTS_DIR.glob("*.otf"))
+    if not fonts:
+        raise FileNotFoundError(f"No se encontraron fuentes TTF/OTF en '{FONTS_DIR.resolve()}'.")
+    print(f"Fuentes caligráficas cargadas: {len(fonts)}")
 
-    if not valid_fonts:
-        print(
-            "Warning: None of the fonts fully passed glyph verification. Falling back to all fonts."
-        )
-        valid_fonts = all_fonts
+    # Obtener frases reales de los libros
+    sentences = build_sentence_bank_from_pdfs(PDF_DIR, num_samples)
 
-    print(
-        f"Generating {num_samples} synthetic Spanish handwriting samples across {len(valid_fonts)} fonts..."
-    )
-    phrases = generate_phrases(min_count=num_samples // 2)
+    # Preparar tareas
+    tasks = []
+    for idx, phrase in enumerate(sentences):
+        assigned_font = random.choice(fonts)
+        tasks.append((idx, phrase, assigned_font))
 
-    metadata_records = []
+    # Renderizado en paralelo usando todos los núcleos físicos/lógicos
+    workers = max(1, (os.cpu_count() or 4) - 1)
+    print(f"Renderizando {len(tasks)} imágenes en disco usando {workers} núcleos...")
 
-    for i in range(num_samples):
-        text = random.choice(phrases)
-        font_path = random.choice(valid_fonts)
-        filename = f"synthetic_line_{i:05d}.png"
-        file_path = IMAGES_DIR / filename
+    metadata_lines = ["file_name\ttext\n"]
 
-        render_synthetic_line(text, font_path, str(file_path))
-        metadata_records.append(
-            {"file_name": f"images/{filename}", "text": text}
-        )
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for count, line in enumerate(executor.map(render_single_crop, tasks, chunksize=100), 1):
+            metadata_lines.append(line)
+            if count % 2500 == 0 or count == len(tasks):
+                print(f" -> Progreso: {count}/{len(tasks)} imágenes generadas...")
 
-        if (i + 1) % 500 == 0:
-            print(f"Generated {i + 1}/{num_samples} crops...")
+    # Guardar metadatos TSV
+    with open(METADATA_FILE, "w", encoding="utf-8") as f:
+        f.writelines(metadata_lines)
 
-    # Write metadata.csv
-    csv_file = OUTPUT_DIR / "metadata.csv"
-    with open(csv_file, mode="w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["file_name", "text"])
-        writer.writeheader()
-        writer.writerows(metadata_records)
-
-    print(
-        f"Completed: {num_samples} samples generated with labels at {csv_file}"
-    )
+    print(f"\nGeneración completada: {len(tasks)} imágenes en '{IMAGES_DIR}' y metadatos en '{METADATA_FILE}'.")
 
 
 if __name__ == "__main__":
-    generate_dataset(num_samples=3000)
+    generate_dataset(TARGET_SAMPLES)

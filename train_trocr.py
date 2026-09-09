@@ -1,27 +1,38 @@
-import evaluate
-import numpy as np
 import os
+from pathlib import Path
 import pandas as pd
 from PIL import Image
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from transformers import (
-    DefaultDataCollator,
     RobertaTokenizer,
-    Seq2SeqTrainer,
-    Seq2SeqTrainingArguments,
     TrOCRProcessor,
     VisionEncoderDecoderModel,
     ViTImageProcessor,
+    get_cosine_schedule_with_warmup,
 )
+from torch.optim import AdamW
 
-num_cores = os.cpu_count() or 4
-torch.set_num_threads(num_cores)
+# Verification
+assert torch.cuda.is_available(), "GPU not found! Enable T4 GPU under Runtime > Change runtime type."
+device = torch.device("cuda")
+print(f"Using compute accelerator: {torch.cuda.get_device_name(0)}")
 
-# Dataset Class
-class SpanishHandwritingDataset(Dataset):
-    def __init__(self, df, processor, max_target_length=64):
-        self.df = df
+# Paths
+DATASET_DIR = Path("dataset")
+IMAGES_DIR = DATASET_DIR / "images"
+METADATA_PATH = DATASET_DIR / "metadata.tsv"
+OUTPUT_DIR = Path("trocr_spanish_final")
+CHECKPOINT_DIR = Path("trocr_temp_checkpoint")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# 3. Dataset definition
+class SpanishHTRDataset(Dataset):
+    def __init__(self, metadata_path, images_dir, processor, max_target_length=64):
+        self.df = pd.read_csv(metadata_path, sep="\t").dropna().reset_index(drop=True)
+        self.images_dir = images_dir
         self.processor = processor
         self.max_target_length = max_target_length
 
@@ -29,108 +40,118 @@ class SpanishHandwritingDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        item = self.df.iloc[idx]
-        image = Image.open(item["file_path"]).convert("RGB")
-        pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze(0)
+        row = self.df.iloc[idx]
+        img_path = self.images_dir / row["file_name"]
+        image = Image.open(img_path).convert("RGB")
+        text = str(row["text"]).strip()
 
-        # Tokenize the Spanish ground truth string
+        pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze(0)
         labels = self.processor.tokenizer(
-            item["text"],
+            text,
             padding="max_length",
             max_length=self.max_target_length,
             truncation=True,
-            return_tensors="pt",
+            return_tensors="pt"
         ).input_ids.squeeze(0)
 
-        # PyTorch CrossEntropyLoss ignores index -100 (padding tokens)
-        labels = [
-            label if label != self.processor.tokenizer.pad_token_id else -100
-            for label in labels
-        ]
-
-        return {"pixel_values": pixel_values, "labels": torch.tensor(labels)}
+        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        return {"pixel_values": pixel_values, "labels": labels}
 
 
-# CER Metric Evaluation
-cer_metric = evaluate.load("cer")
+# Model & Processor initialization
+BASE_MODEL = "microsoft/trocr-base-handwritten"
 
-def compute_metrics(pred, tokenizer):
-    labels_ids = pred.label_ids
-    pred_ids = pred.predictions
+image_processor = ViTImageProcessor.from_pretrained(BASE_MODEL)
+tokenizer = RobertaTokenizer.from_pretrained(BASE_MODEL)
+processor = TrOCRProcessor(image_processor=image_processor, tokenizer=tokenizer)
 
-    pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-    labels_ids[labels_ids == -100] = tokenizer.pad_token_id
-    label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
-
-    cer = cer_metric.compute(predictions=pred_str, references=label_str)
-    return {"cer": cer}
-
-
-# Training Execution
-def train():
-    device = "cpu"
-    repo_id = "microsoft/trocr-base-handwritten"
-
-    # Load processor using explicit RobertaTokenizer to prevent Windows fast-tokenizer errors
-    image_processor = ViTImageProcessor.from_pretrained(repo_id)
-    tokenizer = RobertaTokenizer.from_pretrained(repo_id)
-    processor = TrOCRProcessor(
-        image_processor=image_processor, tokenizer=tokenizer
-    )
-
-    model = VisionEncoderDecoderModel.from_pretrained(repo_id)
-    for param in model.encoder.parameters():
-        param.requires_grad = False
-
-    model.to(device)
-
-    # Configure model sequence generation settings
-    model.config.decoder_start_token_id = tokenizer.bos_token_id
+# Check if a temporary checkpoint exists to resume from
+if (CHECKPOINT_DIR / "pytorch_model.bin").exists() or (CHECKPOINT_DIR / "model.safetensors").exists():
+    print(f"Resuming training from temporary checkpoint in {CHECKPOINT_DIR}...")
+    model = VisionEncoderDecoderModel.from_pretrained(CHECKPOINT_DIR)
+else:
+    print(f"Loading fresh base architecture: {BASE_MODEL}...")
+    model = VisionEncoderDecoderModel.from_pretrained(BASE_MODEL)
+    model.config.decoder_start_token_id = tokenizer.cls_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
     model.config.vocab_size = model.config.decoder.vocab_size
 
-    # Load dataset
-    df = pd.read_csv("dataset/metadata.csv")
-    df["file_path"] = "dataset/" + df["file_name"]
+# Unfreeze encoder and decoder
+for param in model.encoder.parameters():
+    param.requires_grad = True
+for param in model.decoder.parameters():
+    param.requires_grad = True
 
-    # 90/10 train/validation split
-    train_df = df.sample(n=1500, random_state=42)
-    val_df = df.drop(train_df.index).sample(n=150, random_state=42)
+model.to(device)
 
-    train_dataset = SpanishHandwritingDataset(train_df, processor)
-    eval_dataset = SpanishHandwritingDataset(val_df, processor)
+# Dataloader & Training Hyperparameters
+train_dataset = SpanishHTRDataset(METADATA_PATH, IMAGES_DIR, processor)
+BATCH_SIZE = 16
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True,
+    drop_last=True
+)
 
-    training_args = Seq2SeqTrainingArguments(
-        output_dir="./trocr_spanish_checkpoint",
-        per_device_train_batch_size=8,  # Increased batch size reduces step overhead
-        per_device_eval_batch_size=8,
-        predict_with_generate=False,  # False to skip slow autoregressive eval steps on CPU
-        eval_strategy="no",  # Skip eval during training to save time; evaluate only at the end
-        save_strategy="epoch",
-        logging_steps=25,
-        num_train_epochs=2,  # 2 epochs is sufficient for the decoder to adapt
-        learning_rate=1e-4,
-        dataloader_num_workers=0,  # Windows stability
-        save_total_limit=1,
-    )
+EPOCHS = 2
+LEARNING_RATE = 4e-5
+total_training_steps = len(train_loader) * EPOCHS
+warmup_steps = int(total_training_steps * 0.08)
 
-    trainer = Seq2SeqTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        data_collator=DefaultDataCollator(),
-    )
+optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=warmup_steps,
+    num_training_steps=total_training_steps
+)
 
-    print(
-        f"Starting accelerated CPU training using {num_cores} threads (Encoder Frozen)..."
-    )
-    trainer.train()
+print(
+    f"Total samples: {len(train_dataset)} | Steps per epoch: {len(train_loader)} | Total steps: {total_training_steps}")
 
-    # Save final Spanish checkpoint
-    trainer.save_model("./trocr_spanish_final")
-    processor.save_pretrained("./trocr_spanish_final")
-    print("Model saved to ./trocr_spanish_final")
+# Training Loop with Periodic Checkpointing
+model.train()
+global_step = 0
 
+for epoch in range(EPOCHS):
+    running_loss = 0.0
+    print(f"\n--- Epoch {epoch + 1}/{EPOCHS} ---")
 
-if __name__ == "__main__":
-    train()
+    for step, batch in enumerate(train_loader):
+        optimizer.zero_grad()
+
+        pixel_values = batch["pixel_values"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
+
+        outputs = model(pixel_values=pixel_values, labels=labels)
+        loss = outputs.loss
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+        optimizer.step()
+        scheduler.step()
+
+        running_loss += loss.item()
+        global_step += 1
+
+        # Save a backup checkpoint every 500 steps so you never lose progress
+        if global_step % 500 == 0:
+            print(f"Saving interim checkpoint at step {global_step}...")
+            model.save_pretrained(CHECKPOINT_DIR)
+            processor.save_pretrained(CHECKPOINT_DIR)
+
+        if (step + 1) % 100 == 0:
+            avg_loss = running_loss / 100
+            current_lr = scheduler.get_last_lr()[0]
+            print(
+                f"Epoch [{epoch + 1}/{EPOCHS}] | Step [{step + 1}/{len(train_loader)}] | Loss: {avg_loss:.4f} | LR: {current_lr:.2e}")
+            running_loss = 0.0
+
+# Final Export
+print(f"\nTraining complete. Saving final model and processor to '{OUTPUT_DIR}'...")
+model.save_pretrained(OUTPUT_DIR)
+processor.save_pretrained(OUTPUT_DIR)
+print("Saved successfully.")
