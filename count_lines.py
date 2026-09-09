@@ -17,7 +17,7 @@ from typing import NamedTuple
 import cv2
 import numpy as np
 
-IMAGE_FILE = "images/test4.png"
+IMAGE_FILE = "images/test1.jpg"
 
 # Tuning constants
 WORK_WIDTH = 1200        # images are downscaled to this width before analysis
@@ -168,7 +168,7 @@ def _merge_slivers(bands: list[tuple[int, int]], streaks: np.ndarray) -> list[tu
     # A row of ascender tips or descender tails reaches across only a little of
     # the width, whereas even a one-word line is a solid streak. That makes
     # coverage the signal for "leftover stroke, not a line", and unlike an ink
-    # density test it does not punish short lines.
+    # density test, it does not punish short lines.
     coverage = [_width_coverage(streaks, band) for band in bands]
     sliver_limit = max(coverage) * SLIVER_RATIO
 
@@ -282,6 +282,39 @@ def _write_debug_image(image: np.ndarray, bands: list[tuple[int, int]], debug_pa
     print(f"Annotated image written to '{debug_path}'.")
 
 
+def crop_and_save_lines(image_path: str, lines: list[TextLine], output_dir: str = "output") -> None:
+    """Crops each detected text line from the original image and saves it as a PNG."""
+    target_path = Path(image_path)
+    if not target_path.exists():
+        target_path = Path("images") / image_path
+    if not target_path.exists():
+        print(f"Error: Could not find image '{image_path}'.")
+        return
+
+    # Read the original full-resolution image
+    image = cv2.imread(str(target_path))
+    if image is None:
+        print(f"Error: Could not read image '{target_path}'.")
+        return
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = target_path.stem
+
+    print(f"\nCropping {len(lines)} line(s) and saving to '{out_dir}'...")
+    for i, line in enumerate(lines, start=1):
+        # Crop the image using numpy slicing: image[top:bottom, left:right]
+        # We take the full width of the image (:)
+        cropped_img = image[line.top:line.bottom, :]
+
+        # Build the output file path (e.g., output/test4_line_01.png)
+        out_file = out_dir / f"{base_name}_line_{i:02d}.png"
+
+        # Save the image
+        cv2.imwrite(str(out_file), cropped_img)
+        print(f"  Saved: {out_file}")
+
 def _print_report(image_path: str, lines: list[TextLine]) -> None:
     """Prints the line count followed by the height of each individual line."""
     print(f"\nLines of text detected in '{image_path}': {len(lines)}")
@@ -298,12 +331,10 @@ def _print_report(image_path: str, lines: list[TextLine]) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Count the lines of text in a photo and show the height of each line.")
-    parser.add_argument("image", nargs="?", default=IMAGE_FILE,
-                        help=f"image path or file name under images/ (default: {IMAGE_FILE})")
-    parser.add_argument("--debug", metavar="PATH", nargs="?", const="output/line_boxes.png",
-                        help="save a copy with the measured lines boxed in red")
-    args = parser.parse_args()
-
-    _print_report(args.image, measure_text_lines(args.image, args.debug))
+    # Analyze the image to find text lines
+    detected_lines = measure_text_lines(IMAGE_FILE)
+    # Print out the calculated line metrics
+    _print_report(IMAGE_FILE, detected_lines)
+    # Crop and save those lines as individual files
+    if detected_lines:
+        crop_and_save_lines(IMAGE_FILE, detected_lines, output_dir="output")
