@@ -12,9 +12,10 @@ Powered by a fine-tuned Vision-Encoder-Decoder model hosted on Hugging Face:
 
 ## Key Features
 
-- **Zero English Hallucination:** Standard TrOCR models default to English syntax and hallucinate random English text when processing Spanish sentences. This model is fine-tuned specifically on modern Spanish vocabulary and orthography.
-- **Diacritics & Special Glyphs:** Full character coverage for `á, é, í, ó, ú, ü`, `ñ`, and punctuation (`¿`, `¡`).
-- **Export Formats:** Direct export to clean `.txt` transcripts and formatted `.pdf` reports.
+- **Zero English Hallucination:** standard TrOCR decoders frequently hallucinate English phrases when reading Spanish. This model is fine-tuned to adhere to modern Spanish vocabulary, syntax, and sentence structure.
+- **Pre-trained Weights Included:** uses [`ifesther/trocr-spanish-handwritten`](https://huggingface.co/ifesther/trocr-spanish-handwritten) hosted on Hugging Face. **No training required to use this tool.**
+- **Document Segmentation:** employs morphological OpenCV filters to extract individual text lines from full notebook pages.
+- **Direct Export:** converts raw scans into `.txt` and `.pdf` reports.
 
 ---
 
@@ -33,9 +34,9 @@ Powered by a fine-tuned Vision-Encoder-Decoder model hosted on Hugging Face:
   ```source .venv/bin/activate```
 3. Install dependencies:
   ```pip install -r requirements.txt```
-4. Run Transcription: transcribe an image containing handwriting 
+4. Run Transcription: transcribe an image containing handwriting. You can use the default one, or add a new one into the ```images/``` folder and change the directory on ```IMAGE_FILE```. Then run:
 ```
-python main.py --image samples/test_note.png --format pdf
+python main.py
 ```
 
 ---
@@ -59,13 +60,14 @@ model = VisionEncoderDecoderModel.from_pretrained(
 ---
 
 ## Repository Architecture
-- ```main.py```: entry point for full-page processing and document export (.txt / .pdf).
-- ```generate_synthetic_dataset.py```: synthetic generator used to create diverse handwriting line crops.
-- ```train_trocr.py```: fine-tuning script (only needed if retraining from scratch).
+- ```main.py```: entry point for full-page processing and document export (.txt / .pdf). From here you can change the desired photo to analyze. 
+- ```generate_synthetic_dataset.py```: synthetic generator used to create diverse handwriting line crops, ending in a large dataset with 30 thousand crops to train the model.
+- ```train_trocr.py```: fine-tuning script (only needed if retraining from scratch, I recommend running it from Google Collab).
 - ```upload_model.py```: was used to upload the trained model to Hugging Face.
 - ```local_app.py```: optional interactive visual UI.
 - ```fonts/``` & ```training_pdf/```: input source materials.
 - ```images/```: samples.
+- ```count_lines.py``` & ```check_lines.py```: calculate the heights, top and bottom pixels from each line detected in a photo. Then crops each detected text line from the original image and saves it as a PNG. They will all be used by ```main.py``` to individually predict its text and then put it toghether.
 
 ---
 
