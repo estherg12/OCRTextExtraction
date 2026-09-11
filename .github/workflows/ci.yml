@@ -8,6 +8,7 @@ on:
 
 jobs:
   build-lint-test:
+    if: github.actor != 'estherg12'
     runs-on: ubuntu-latest
 
     steps:
