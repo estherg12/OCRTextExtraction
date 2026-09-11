@@ -41,6 +41,11 @@ python main.py
 
 ---
 
+## Contributing
+Contributions are highly encouraged! Whether it's improving the segmentation algorithm, optimizing inference speed, or adding new features, please see our [CONTRIBUTING.md](https://github.com/estherg12/OCRTextExtraction/blob/main/CONTRIBUTING.md) for guidelines on how to get involved.
+
+---
+
 ## Model Checkpoint
 The core engine is based on a Vision-Encoder-Decoder fine-tuned on synthetic Spanish notebook text generated across 41 handwriting fonts.
 - **Hugging Face Hub**: [![Model on HF](https://huggingface.co/datasets/huggingface/badges/resolve/main/model-on-hf-sm.svg)](https://huggingface.co/ifesther/trocr-spanish-handwritten)
