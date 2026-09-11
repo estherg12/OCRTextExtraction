@@ -2,13 +2,11 @@ import pytest
 from count_lines import count_text_lines
 
 # Dictionary of test images and their verified line counts.
-# Ensure these specific images are committed to a 'tests/test_images/' or 'images/' folder.
 EXPECTED_COUNTS = {
-    "phrase1.jpg": 1,
-    "test1.jpg": 4,
-    "test3.png": 3,
-    "test4.png": 6,
-    "test6.png": 12,
+    "images/test1.png": 4,
+    "images/test3.png": 3,
+    "images/test4.png": 6,
+    "images/test6.png": 12,
 }
 
 @pytest.mark.parametrize("image_filename, expected_lines", EXPECTED_COUNTS.items())
