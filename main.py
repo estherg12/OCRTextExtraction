@@ -1,4 +1,5 @@
-import os, shutil
+import os
+import shutil
 from pathlib import Path
 import re
 import torch
@@ -11,11 +12,11 @@ from transformers import (
     ViTImageProcessor,
 )
 from spellchecker import SpellChecker
-from count_lines import run_as_main
 
 # Target a single-phrase test image directly
 IMAGE_FILE = "test3"
 LOCAL_MODEL_DIR = "./trocr_spanish_final"
+
 
 def correct_spanish_text(text: str) -> str:
     """Certifies words against the Spanish vocabulary and corrects typos/confusions."""
@@ -41,7 +42,14 @@ def correct_spanish_text(text: str) -> str:
 
     return " ".join(corrected_words)
 
-def test_single_phrase(image_path: str, processor: TrOCRProcessor, model: VisionEncoderDecoderModel, i: int) -> tuple[str, str]:
+
+def test_single_phrase(
+    image_path: str,
+    processor: TrOCRProcessor,
+    model: VisionEncoderDecoderModel,
+    i: int,
+    device: str = "cpu"
+) -> tuple[str, str]:
     # Locate image
     target_path = image_path
     if not Path(target_path).exists():
@@ -73,6 +81,7 @@ def test_single_phrase(image_path: str, processor: TrOCRProcessor, model: Vision
 
     return text, corrected_text
 
+
 def delete_output_content():
     folder = "output"
     for filename in os.listdir(folder):
@@ -85,6 +94,7 @@ def delete_output_content():
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
+
 def export_to_txt(lines: list[str], output_path: str):
     """Export lines to a UTF-8 text file."""
     with open(output_path, "w", encoding="utf-8") as f:
@@ -95,7 +105,7 @@ def export_to_txt(lines: list[str], output_path: str):
 def export_to_pdf(lines: list[str], output_path: str):
     """Export lines to a PDF file handling Spanish characters and accents."""
     pdf = FPDF(format='letter')
-    #pdf.set_auto_page_break(auto=True, margin=15)
+    # pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Helvetica", size=16)
 
@@ -107,51 +117,47 @@ def export_to_pdf(lines: list[str], output_path: str):
     pdf.output(output_path)
     print(f"Saved transcript to: {output_path}")
 
+
 if __name__ == "__main__":
-    detected_lines = run_as_main("images/"+IMAGE_FILE+".png")
+    import argparse
+    from batch_process import batch_process, process_image
+
+    parser = argparse.ArgumentParser(description="OCR handwritten line extraction and transcription.")
+    parser.add_argument("path", nargs="?", default=None, help="Path to directory or image file to process")
+    parser.add_argument("--folder", "-f", default=None, help="Directory containing images to batch process")
+    parser.add_argument("--image", "-i", default=None, help="Path to single image file to process")
+    parser.add_argument("--output", "-o", default="output", help="Output directory (default: output)")
+    parser.add_argument("--model-dir", "-m", default=LOCAL_MODEL_DIR, help="Local model directory")
+    args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    if not os.path.exists(LOCAL_MODEL_DIR):
-        raise FileNotFoundError(f"Local model directory '{LOCAL_MODEL_DIR}' missing.")
+    if not os.path.exists(args.model_dir):
+        raise FileNotFoundError(f"Local model directory '{args.model_dir}' missing.")
 
-    print(f"\nLoading local model from '{LOCAL_MODEL_DIR}' on {device}...")
+    print(f"\nLoading local model from '{args.model_dir}' on {device}...")
 
     # Load processor, tokenizer, and model directly
-    image_processor = ViTImageProcessor.from_pretrained(LOCAL_MODEL_DIR)
-    tokenizer = RobertaTokenizer.from_pretrained(LOCAL_MODEL_DIR)
+    image_processor = ViTImageProcessor.from_pretrained(args.model_dir)
+    tokenizer = RobertaTokenizer.from_pretrained(args.model_dir)
     processor = TrOCRProcessor(image_processor=image_processor, tokenizer=tokenizer)
-    model = VisionEncoderDecoderModel.from_pretrained(LOCAL_MODEL_DIR).to(device)
+    model = VisionEncoderDecoderModel.from_pretrained(args.model_dir).to(device)
     model.eval()
 
-    RAW_LINES = []
-    NLP_LINES = []
+    folder_target = args.folder
+    image_target = args.image
 
-    for i, line in enumerate(detected_lines, start=1):
-        txt_tuple = test_single_phrase(f"output/{IMAGE_FILE}_line_{i}.png", processor, model, i)
+    if args.path:
+        p = Path(args.path)
+        if p.is_dir() or (not p.exists() and not p.suffix):
+            folder_target = args.path
+        else:
+            image_target = args.path
 
-        raw_text = txt_tuple[0]
-        corrected_text = txt_tuple[1]
-
-        RAW_LINES.append(raw_text)
-        NLP_LINES.append(corrected_text)
-
-    print(f"\nRaw Lines:\n{RAW_LINES}")
-    print(f"\nNLP Lines:\n{NLP_LINES}")
-
-    delete_output_content()
-    print("\nOutput content deleted.")
-
-    base_name = Path(IMAGE_FILE).stem
-
-    txt_out_raw = f"output/{base_name}_transcription_raw.txt"
-    pdf_out_raw = f"output/{base_name}_transcription_raw.pdf"
-    txt_out_nlp = f"output/{base_name}_transcription_nlp.txt"
-    pdf_out_nlp = f"output/{base_name}_transcription_nlp.pdf"
-
-    export_to_txt(RAW_LINES, txt_out_raw)
-    export_to_pdf(RAW_LINES, pdf_out_raw)
-    export_to_txt(NLP_LINES, txt_out_nlp)
-    export_to_pdf(NLP_LINES, pdf_out_nlp)
-
-    print("Transcription files saved.")
+    if folder_target:
+        print(f"Starting batch processing on folder: {folder_target}")
+        batch_process(folder_target, processor=processor, model=model, output_dir=args.output, device=device)
+    else:
+        target_image = image_target or f"images/{IMAGE_FILE}.png"
+        print(f"Processing single image: {target_image}")
+        process_image(target_image, processor=processor, model=model, output_dir=args.output, device=device)
