@@ -34,10 +34,17 @@ Powered by a fine-tuned Vision-Encoder-Decoder model hosted on Hugging Face:
   ```source .venv/bin/activate```
 3. Install dependencies:
   ```pip install -r requirements.txt```
-4. Run Transcription: transcribe an image containing handwriting. You can use the default one, or add a new one into the ```images/``` folder and change the directory on ```IMAGE_FILE```. Then run:
-```
-python main.py
-```
+4. **Run Transcription:** transcribe an image or an entire folder of handwriting images:
+   - **Single image:**
+     ```bash
+     python main.py --image images/test3.png
+     ```
+   - **Batch process an entire directory:**
+     ```bash
+     python main.py --folder images/
+     # or using batch_process.py:
+     python batch_process.py images/ --output output/
+     ```
 
 ---
 
