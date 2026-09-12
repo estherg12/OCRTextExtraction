@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import pytest
 from batch_process import (
@@ -9,7 +8,6 @@ from batch_process import (
     transcribe_lines,
     process_image,
     batch_process,
-    SUPPORTED_EXTENSIONS,
 )
 
 
@@ -74,6 +72,16 @@ def test_export_to_txt_and_pdf(tmp_path):
     assert pdf_path.stat().st_size > 0
 
 
+def test_export_to_pdf_unicode_punctuation(tmp_path):
+    # Tests non-Latin-1 characters like em-dashes and curly quotes
+    lines = ["Nota con guión — y comillas “españolas”", "Puntos suspensivos… y viñeta •"]
+    pdf_path = tmp_path / "unicode_test.pdf"
+
+    export_to_pdf(lines, pdf_path)
+    assert pdf_path.exists()
+    assert pdf_path.stat().st_size > 0
+
+
 def test_transcribe_lines_with_custom_fn():
     mock_images = ["output/sample_line_1.png", "output/sample_line_2.png"]
 
@@ -99,22 +107,30 @@ def test_process_image_end_to_end(tmp_path):
     )
 
     assert result != {}
+    assert "txt" in result
+    assert "pdf" in result
     assert "txt_raw" in result
     assert "pdf_raw" in result
     assert "txt_nlp" in result
     assert "pdf_nlp" in result
 
     # Check generated files
+    assert Path(result["txt"]).exists()
+    assert Path(result["pdf"]).exists()
     assert Path(result["txt_raw"]).exists()
     assert Path(result["pdf_raw"]).exists()
     assert Path(result["txt_nlp"]).exists()
     assert Path(result["pdf_nlp"]).exists()
 
-    # Ensure output files are named after the input image stem
+    # Ensure output files are named exactly after the input image stem
+    assert result["txt"].endswith("test3.txt")
+    assert result["pdf"].endswith("test3.pdf")
     assert "test3_transcription_raw.txt" in result["txt_raw"]
     assert "test3_transcription_raw.pdf" in result["pdf_raw"]
 
     # Verify transcript contents
+    main_content = Path(result["txt"]).read_text(encoding="utf-8")
+    assert "Corrected line 1" in main_content
     raw_content = Path(result["txt_raw"]).read_text(encoding="utf-8")
     assert "Raw line 1" in raw_content
 
@@ -143,8 +159,12 @@ def test_batch_process_directory(tmp_path):
     )
 
     assert len(results) == 2
-    # Verify outputs for both images exist
+    # Verify outputs for both images exist, including exact-named files
+    assert (out_dir / "sample1.txt").exists()
+    assert (out_dir / "sample1.pdf").exists()
     assert (out_dir / "sample1_transcription_raw.txt").exists()
     assert (out_dir / "sample1_transcription_raw.pdf").exists()
+    assert (out_dir / "sample2.txt").exists()
+    assert (out_dir / "sample2.pdf").exists()
     assert (out_dir / "sample2_transcription_raw.txt").exists()
     assert (out_dir / "sample2_transcription_raw.pdf").exists()

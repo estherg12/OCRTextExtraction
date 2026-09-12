@@ -1,7 +1,6 @@
 import os
-import sys
 from pathlib import Path
-from count_lines import measure_text_lines, crop_and_save_lines, TextLine
+from count_lines import measure_text_lines, crop_and_save_lines
 
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 
@@ -47,8 +46,21 @@ def export_to_txt(lines: list[str], output_path: str | Path) -> None:
     print(f"Saved transcript to: {output_path}")
 
 
+def _sanitize_pdf_text(text: str) -> str:
+    """Replaces Unicode punctuation not present in Latin-1 with safe substitutes."""
+    replacements = {
+        '—': '-', '–': '-', '―': '-',
+        '“': '"', '”': '"', '«': '"', '»': '"',
+        '‘': "'", '’': "'", '`': "'",
+        '…': '...', '•': '*', '\xa0': ' '
+    }
+    for orig, repl in replacements.items():
+        text = text.replace(orig, repl)
+    return text.encode('latin-1', errors='replace').decode('latin-1')
+
+
 def export_to_pdf(lines: list[str], output_path: str | Path) -> None:
-    """Export lines to a PDF file handling Spanish characters and accents."""
+    """Export lines to a PDF file handling Spanish characters, accents, and punctuation."""
     from fpdf import FPDF
 
     output_path = Path(output_path)
@@ -58,7 +70,8 @@ def export_to_pdf(lines: list[str], output_path: str | Path) -> None:
     pdf.set_font("Helvetica", size=16)
 
     for line in lines:
-        pdf.cell(200, 10, text=line, align='C', new_x="LMARGIN", new_y="NEXT")
+        safe_line = _sanitize_pdf_text(line)
+        pdf.cell(200, 10, text=safe_line, align='C', new_x="LMARGIN", new_y="NEXT")
         pdf.ln()
 
     pdf.output(str(output_path))
@@ -145,17 +158,25 @@ def process_image(
     # Clean up intermediate line crops
     cleanup_line_crops(output_dir=out_dir, prefix=base_name)
 
+    # Primary output files named exactly after input image
+    txt_main = out_dir / f"{base_name}.txt"
+    pdf_main = out_dir / f"{base_name}.pdf"
     txt_raw = out_dir / f"{base_name}_transcription_raw.txt"
     pdf_raw = out_dir / f"{base_name}_transcription_raw.pdf"
     txt_nlp = out_dir / f"{base_name}_transcription_nlp.txt"
     pdf_nlp = out_dir / f"{base_name}_transcription_nlp.pdf"
 
+    final_lines = nlp_lines if any(nlp_lines) else raw_lines
+    export_to_txt(final_lines, txt_main)
+    export_to_pdf(final_lines, pdf_main)
     export_to_txt(raw_lines, txt_raw)
     export_to_pdf(raw_lines, pdf_raw)
     export_to_txt(nlp_lines, txt_nlp)
     export_to_pdf(nlp_lines, pdf_nlp)
 
     return {
+        "txt": str(txt_main),
+        "pdf": str(pdf_main),
         "txt_raw": str(txt_raw),
         "pdf_raw": str(pdf_raw),
         "txt_nlp": str(txt_nlp),
@@ -196,7 +217,9 @@ def batch_process(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Batch process directory of images for OCR line extraction and transcription.")
+    parser = argparse.ArgumentParser(
+        description="Batch process directory of images for OCR line extraction and transcription."
+    )
     parser.add_argument("directory", nargs="?", default="images", help="Path to folder containing images (default: images)")
     parser.add_argument("--output", "-o", default="output", help="Output directory (default: output)")
     parser.add_argument("--model-dir", "-m", default="./trocr_spanish_final", help="Path to local TrOCR model directory")

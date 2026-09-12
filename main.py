@@ -1,4 +1,5 @@
-import os, shutil
+import os
+import shutil
 from pathlib import Path
 import re
 import torch
@@ -11,11 +12,11 @@ from transformers import (
     ViTImageProcessor,
 )
 from spellchecker import SpellChecker
-from count_lines import run_as_main
 
 # Target a single-phrase test image directly
 IMAGE_FILE = "test3"
 LOCAL_MODEL_DIR = "./trocr_spanish_final"
+
 
 def correct_spanish_text(text: str) -> str:
     """Certifies words against the Spanish vocabulary and corrects typos/confusions."""
@@ -41,7 +42,14 @@ def correct_spanish_text(text: str) -> str:
 
     return " ".join(corrected_words)
 
-def test_single_phrase(image_path: str, processor: TrOCRProcessor, model: VisionEncoderDecoderModel, i: int, device: str = "cpu") -> tuple[str, str]:
+
+def test_single_phrase(
+    image_path: str,
+    processor: TrOCRProcessor,
+    model: VisionEncoderDecoderModel,
+    i: int,
+    device: str = "cpu"
+) -> tuple[str, str]:
     # Locate image
     target_path = image_path
     if not Path(target_path).exists():
@@ -73,6 +81,7 @@ def test_single_phrase(image_path: str, processor: TrOCRProcessor, model: Vision
 
     return text, corrected_text
 
+
 def delete_output_content():
     folder = "output"
     for filename in os.listdir(folder):
@@ -85,6 +94,7 @@ def delete_output_content():
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
+
 def export_to_txt(lines: list[str], output_path: str):
     """Export lines to a UTF-8 text file."""
     with open(output_path, "w", encoding="utf-8") as f:
@@ -95,7 +105,7 @@ def export_to_txt(lines: list[str], output_path: str):
 def export_to_pdf(lines: list[str], output_path: str):
     """Export lines to a PDF file handling Spanish characters and accents."""
     pdf = FPDF(format='letter')
-    #pdf.set_auto_page_break(auto=True, margin=15)
+    # pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Helvetica", size=16)
 
@@ -107,11 +117,13 @@ def export_to_pdf(lines: list[str], output_path: str):
     pdf.output(output_path)
     print(f"Saved transcript to: {output_path}")
 
+
 if __name__ == "__main__":
     import argparse
     from batch_process import batch_process, process_image
 
     parser = argparse.ArgumentParser(description="OCR handwritten line extraction and transcription.")
+    parser.add_argument("path", nargs="?", default=None, help="Path to directory or image file to process")
     parser.add_argument("--folder", "-f", default=None, help="Directory containing images to batch process")
     parser.add_argument("--image", "-i", default=None, help="Path to single image file to process")
     parser.add_argument("--output", "-o", default="output", help="Output directory (default: output)")
@@ -132,10 +144,20 @@ if __name__ == "__main__":
     model = VisionEncoderDecoderModel.from_pretrained(args.model_dir).to(device)
     model.eval()
 
-    if args.folder:
-        print(f"Starting batch processing on folder: {args.folder}")
-        batch_process(args.folder, processor=processor, model=model, output_dir=args.output, device=device)
+    folder_target = args.folder
+    image_target = args.image
+
+    if args.path:
+        p = Path(args.path)
+        if p.is_dir() or (not p.exists() and not p.suffix):
+            folder_target = args.path
+        else:
+            image_target = args.path
+
+    if folder_target:
+        print(f"Starting batch processing on folder: {folder_target}")
+        batch_process(folder_target, processor=processor, model=model, output_dir=args.output, device=device)
     else:
-        target_image = args.image or f"images/{IMAGE_FILE}.png"
+        target_image = image_target or f"images/{IMAGE_FILE}.png"
         print(f"Processing single image: {target_image}")
         process_image(target_image, processor=processor, model=model, output_dir=args.output, device=device)
