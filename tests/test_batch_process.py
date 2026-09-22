@@ -82,6 +82,39 @@ def test_export_to_pdf_unicode_punctuation(tmp_path):
     assert pdf_path.stat().st_size > 0
 
 
+def test_export_to_pdf_embeds_line_images(tmp_path):
+    from PIL import Image
+
+    lines = ["Primera línea", "Segunda línea"]
+    line_images = []
+    fixture_colors = [(255, 255, 255), (245, 245, 245)]
+    for index, color in enumerate(fixture_colors, start=1):
+        image_path = tmp_path / f"sample_line_{index}.png"
+        Image.new("RGB", (600, 80), color).save(image_path)
+        line_images.append(image_path)
+
+    pdf_path = tmp_path / "with_images.pdf"
+    export_to_pdf(lines, pdf_path, line_image_paths=line_images)
+
+    assert pdf_path.exists()
+    pdf_bytes = pdf_path.read_bytes()
+    assert pdf_bytes.count(b"/Subtype /Image") == 2
+
+
+def test_export_to_pdf_requires_one_image_per_line(tmp_path):
+    from PIL import Image
+
+    image_path = tmp_path / "sample_line_1.png"
+    Image.new("RGB", (600, 80), "white").save(image_path)
+
+    with pytest.raises(ValueError, match="one image per transcript line"):
+        export_to_pdf(
+            ["Primera línea", "Segunda línea"],
+            tmp_path / "invalid.pdf",
+            line_image_paths=[image_path],
+        )
+
+
 def test_transcribe_lines_with_custom_fn():
     mock_images = ["output/sample_line_1.png", "output/sample_line_2.png"]
 
@@ -128,13 +161,14 @@ def test_process_image_end_to_end(tmp_path):
     assert "test3_transcription_raw.txt" in result["txt_raw"]
     assert "test3_transcription_raw.pdf" in result["pdf_raw"]
 
-    # Verify transcript contents
+    # Verify transcript contents and that line crops were embedded in the PDF
     main_content = Path(result["txt"]).read_text(encoding="utf-8")
     assert "Corrected line 1" in main_content
     raw_content = Path(result["txt_raw"]).read_text(encoding="utf-8")
     assert "Raw line 1" in raw_content
+    assert b"/Subtype /Image" in Path(result["pdf"]).read_bytes()
 
-    # Ensure temporary crop images are cleaned up
+    # Ensure temporary crop images are cleaned up after PDF generation
     remaining_crops = list(output_dir.glob("*_line_*.png"))
     assert len(remaining_crops) == 0
 

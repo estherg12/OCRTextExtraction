@@ -59,20 +59,67 @@ def _sanitize_pdf_text(text: str) -> str:
     return text.encode('latin-1', errors='replace').decode('latin-1')
 
 
-def export_to_pdf(lines: list[str], output_path: str | Path) -> None:
-    """Export lines to a PDF file handling Spanish characters, accents, and punctuation."""
+def export_to_pdf(
+    lines: list[str],
+    output_path: str | Path,
+    line_image_paths: list[str | Path] | None = None,
+) -> None:
+    """
+    Export transcript lines to PDF, optionally showing each source crop above its text.
+
+    When ``line_image_paths`` is provided, it must contain one image for each
+    transcript line so that every OCR result remains visually traceable to its
+    corresponding source crop.
+    """
     from fpdf import FPDF
+    from PIL import Image
+
+    if line_image_paths is not None and len(line_image_paths) != len(lines):
+        raise ValueError("line_image_paths must contain one image per transcript line")
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     pdf = FPDF(format='letter')
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Helvetica", size=16)
 
-    for line in lines:
+    for index, line in enumerate(lines):
+        if line_image_paths is not None:
+            image_path = Path(line_image_paths[index])
+            if not image_path.exists():
+                raise FileNotFoundError(f"Line crop not found: {image_path}")
+
+            with Image.open(image_path) as image:
+                pixel_width, pixel_height = image.size
+
+            if pixel_width <= 0 or pixel_height <= 0:
+                raise ValueError(f"Invalid line crop dimensions: {image_path}")
+
+            max_width = min(pdf.epw, 170)
+            max_height = 60
+            scale = min(max_width / pixel_width, max_height / pixel_height)
+            image_width = pixel_width * scale
+            image_height = pixel_height * scale
+
+            required_height = image_height + 16
+            if pdf.get_y() + required_height > pdf.h - pdf.b_margin:
+                pdf.add_page()
+
+            image_x = (pdf.w - image_width) / 2
+            image_y = pdf.get_y()
+            pdf.image(
+                str(image_path),
+                x=image_x,
+                y=image_y,
+                w=image_width,
+                h=image_height,
+            )
+            pdf.set_y(image_y + image_height + 2)
+
         safe_line = _sanitize_pdf_text(line)
-        pdf.cell(200, 10, text=safe_line, align='C', new_x="LMARGIN", new_y="NEXT")
-        pdf.ln()
+        pdf.cell(0, 10, text=safe_line, align='C', new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(4)
 
     pdf.output(str(output_path))
     print(f"Saved transcript to: {output_path}")
@@ -117,8 +164,8 @@ def process_image(
     1. Measures text lines using measure_text_lines()
     2. Crops and saves line segments into output_dir
     3. Transcribes each line segment
-    4. Cleans up intermediate line crops
-    5. Exports raw and NLP transcriptions as .txt and .pdf named after the input image
+    4. Exports raw and NLP transcriptions as .txt and .pdf named after the input image
+    5. Cleans up intermediate line crops after PDF generation
     """
     img_path = Path(image_path)
     if not img_path.exists():
@@ -155,9 +202,6 @@ def process_image(
         transcribe_fn=transcribe_fn,
     )
 
-    # Clean up intermediate line crops
-    cleanup_line_crops(output_dir=out_dir, prefix=base_name)
-
     # Primary output files named exactly after input image
     txt_main = out_dir / f"{base_name}.txt"
     pdf_main = out_dir / f"{base_name}.pdf"
@@ -167,12 +211,17 @@ def process_image(
     pdf_nlp = out_dir / f"{base_name}_transcription_nlp.pdf"
 
     final_lines = nlp_lines if any(nlp_lines) else raw_lines
-    export_to_txt(final_lines, txt_main)
-    export_to_pdf(final_lines, pdf_main)
-    export_to_txt(raw_lines, txt_raw)
-    export_to_pdf(raw_lines, pdf_raw)
-    export_to_txt(nlp_lines, txt_nlp)
-    export_to_pdf(nlp_lines, pdf_nlp)
+
+    try:
+        export_to_txt(final_lines, txt_main)
+        export_to_pdf(final_lines, pdf_main, line_image_paths=line_image_paths)
+        export_to_txt(raw_lines, txt_raw)
+        export_to_pdf(raw_lines, pdf_raw, line_image_paths=line_image_paths)
+        export_to_txt(nlp_lines, txt_nlp)
+        export_to_pdf(nlp_lines, pdf_nlp, line_image_paths=line_image_paths)
+    finally:
+        # Keep crops available until all PDFs have embedded them, then remove them.
+        cleanup_line_crops(output_dir=out_dir, prefix=base_name)
 
     return {
         "txt": str(txt_main),
