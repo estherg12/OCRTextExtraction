@@ -19,25 +19,95 @@ LOCAL_MODEL_DIR = "./trocr_spanish_final"
 
 
 def correct_spanish_text(text: str) -> str:
-    """Certifies words against the Spanish vocabulary and corrects typos/confusions."""
+    """
+    Certifies words against the Spanish vocabulary and corrects typos/confusions while preserving:
+    - acronyms
+    - proper nouns
+    - mixed-case names
+    - alphanumeric identifiers
+    - numbers
+    - words containing hyphens
+
+    Only ordinary lowercase words are sent to pyspellchecker.
+    """
+
     spell = SpellChecker(language='es')
+
     words = text.split()
     corrected_words = []
 
     for word in words:
-        # Extract alphanumeric content to check against dictionary
-        clean_word = re.sub(r'[^\wáéíóúüñÁÉÍÓÚÜÑ]', '', word)
-        if clean_word and not clean_word.isdigit():
-            # If the word is unknown/misspelled, find the most probable valid Spanish substitute
-            unknowns = spell.unknown([clean_word.lower()])
-            if clean_word.lower() in unknowns:
-                correction = spell.correction(clean_word.lower())
-                if correction:
-                    if clean_word.istitle():
-                        correction = correction.capitalize()
-                    elif clean_word.isupper():
-                        correction = correction.upper()
-                    word = word.replace(clean_word, correction)
+
+        # Separate punctuation from the actual token.
+        match = re.match(
+            r"^([^\wáéíóúüñÁÉÍÓÚÜÑ]*)([\wáéíóúüñÁÉÍÓÚÜÑ-]+)([^\wáéíóúüñÁÉÍÓÚÜÑ]*)$",
+            word,
+        )
+
+        if not match:
+            corrected_words.append(word)
+            continue
+
+        prefix, clean_word, suffix = match.groups()
+
+        # ---------------------------------------------------------
+        # 1. Numbers / numeric identifiers
+        # ---------------------------------------------------------
+        if clean_word.isdigit():
+            corrected_words.append(word)
+            continue
+
+        # ---------------------------------------------------------
+        # 2. Words containing digits
+        # ---------------------------------------------------------
+        if any(char.isdigit() for char in clean_word):
+            corrected_words.append(word)
+            continue
+
+        # ---------------------------------------------------------
+        # 3. Acronyms / all-uppercase words
+        # ---------------------------------------------------------
+        if clean_word.isupper() and any(char.isalpha() for char in clean_word):
+            corrected_words.append(word)
+            continue
+
+        # ---------------------------------------------------------
+        # 4. Mixed-case words
+        # ---------------------------------------------------------
+        if (
+            any(char.isupper() for char in clean_word[1:])
+            and any(char.islower() for char in clean_word)
+        ):
+            corrected_words.append(word)
+            continue
+
+        # ---------------------------------------------------------
+        # 5. Hyphenated words
+        # ---------------------------------------------------------
+        if "-" in clean_word:
+            corrected_words.append(word)
+            continue
+
+        # ---------------------------------------------------------
+        # 6. Proper nouns
+        # ---------------------------------------------------------
+        if clean_word.istitle():
+            corrected_words.append(word)
+            continue
+
+        # ---------------------------------------------------------
+        # 7. Perform spell checking.
+        # ---------------------------------------------------------
+        normalized_word = clean_word.lower()
+
+        unknowns = spell.unknown([normalized_word])
+
+        if normalized_word in unknowns:
+            correction = spell.correction(normalized_word)
+
+            if correction:
+                word = ( prefix + correction + suffix )
+
         corrected_words.append(word)
 
     return " ".join(corrected_words)

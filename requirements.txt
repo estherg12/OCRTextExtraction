@@ -8,3 +8,4 @@ pandas
 fpdf2
 huggingface_hub
 pytest
+pyspellchecker
